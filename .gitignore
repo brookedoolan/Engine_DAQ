@@ -6,6 +6,9 @@ venv
 __pycache__/
 *.pyc
 
-# OS
+# OS stuff
 .DS_Store
-Thumbs.db
+Thumbs.dbpp
+
+# vscode
+.vscode/
