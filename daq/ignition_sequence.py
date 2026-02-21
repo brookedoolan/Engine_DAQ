@@ -2,7 +2,8 @@ import time
 from PyQt6.QtCore import QThread, pyqtSignal
 
 class IgnitionSequence(QThread):
-    step_signal = pyqtSignal(str)
+    # Step signal is (valve_name, state)
+    step_signal = pyqtSignal(str, bool)
     finished_signal = pyqtSignal()
     aborted_signal = pyqtSignal()
 
@@ -17,7 +18,7 @@ class IgnitionSequence(QThread):
     # ----- HOT FIRE SEQUENCE -----    
     def run(self):
         try:
-            self._step("IGNITION_SEQUENCE_START")
+            self.step_signal.emit("SEQUENCE", True)
             # Step 0: Close Vent Valve
             self._set_valve("Vent", False)
             self._delay(5.0) # Could maybe ask for manual input here. Say if want to wait for N2O to pressurise 
@@ -32,8 +33,7 @@ class IgnitionSequence(QThread):
 
             # Step 3: Igniter OFF
             self._set_valve("Ignition", False)
-
-            self._step("IGNITION_SEQUENCE_COMPLETE")
+            
             self.finished_signal.emit()
 
         except RuntimeError:
@@ -52,7 +52,7 @@ class IgnitionSequence(QThread):
             raise RuntimeError("IGNITION ABORTED")
 
         self.daq.set_digital(name, state)
-        self._step(f"{name}_{'ON' if state else 'OFF'}")
+        self.step_signal.emit(name, state)
 
-    def _step(self, name):
-        self.step_signal.emit(name)
+    def _step(self, name, state):
+        self.step_signal.emit(name, state)

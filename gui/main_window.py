@@ -9,13 +9,14 @@ import pyqtgraph as pg
 import time 
 import sys 
 import os 
-from PyQt6.QtCore import Qt 
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap 
 from daq.dummy_daq import DummyDaq 
 from daq.daq_thread import DAQ_Thread 
 from logging_data.csv_logger import CSVLogger 
-from config.system_config import VALVES, PRESSURE_CHANNELS, TEMP_CHANNELS, DAQ_INTERVAL_MS, MAX_DATA_POINTS 
-from daq.ignition_sequence import IgnitionSequence 
+import config.system_config as system_config
+from daq.ignition_sequence import IgnitionSequence
+from safety.safety_manager import SafetyManager
 
 # Plots Background colour 
 pg.setConfigOption("background", "#434343") 
@@ -28,6 +29,15 @@ class MainWindow(QMainWindow):
         self.resize(900,600) 
 
         self.system_armed = False # Initially dis-armed 
+
+        # Integrate SAFETY MANAGER
+        self.safety_manager = SafetyManager()
+        self.safety_manager.abort_signal.connect(self.handle_watchdog_abort)
+
+        # Heartbeat timer
+        self.heartbeat_timer = QTimer()
+        self.heartbeat_timer.timeout.connect(self.safety_manager.check_heartbeat)
+        self.heartbeat_timer.start(200) # Check 5x per second (200ms)
 
         # For dark mode 
         self.setStyleSheet(""" 
@@ -75,14 +85,14 @@ class MainWindow(QMainWindow):
 
         # =================== DAQ ========================================= 
         self.daq = DummyDaq() 
-        self.daq_thread = DAQ_Thread(self.daq, DAQ_INTERVAL_MS) 
+        self.daq_thread = DAQ_Thread(self.daq, system_config.DAQ_INTERVAL_MS) 
         self.daq_thread.data_ready.connect(self.handle_new_data) 
         self.daq_thread.start() 
 
         self.start_time = time.time() 
         self.time_data = [] 
-        self.pressure_data = {ch: [] for ch in PRESSURE_CHANNELS} 
-        self.temp_data = {ch: [] for ch in TEMP_CHANNELS} 
+        self.pressure_data = {ch: [] for ch in system_config.PRESSURE_CHANNELS} 
+        self.temp_data = {ch: [] for ch in system_config.TEMP_CHANNELS} 
 
         # Thrust data (load cell data) 
         self.thrust_data = [] 
@@ -208,7 +218,7 @@ class MainWindow(QMainWindow):
 
         # Valve buttons (auto-generated from 'system_config.py') 
         self.valve_buttons = {} 
-        for valve in VALVES: 
+        for valve in system_config.VALVES: 
             btn = QPushButton(valve) # Initial text just valve name 
             btn.setCheckable(True) # Toggle-style button 
             btn.setEnabled(False) # Initially de-energised (NC except Vent which is NO) until system armed 
@@ -239,15 +249,24 @@ class MainWindow(QMainWindow):
 
         ## RIGHT side - plots 
         # First create the plots 
+        colours = ["r", "g", "b", "c", "m", "y", "w"]
+
+        self.pressure_curves = {}
         self.pressure_plot = pg.PlotWidget(title="Pressure vs Time") 
-        self.pressure_curves = {ch: self.pressure_plot.plot(pen=pg.mkPen(color))  
-                                for ch, color in zip(PRESSURE_CHANNELS, ["r","g"])} 
+        for i, ch in enumerate(system_config.PRESSURE_CHANNELS):
+            color = colours[i % len(colours)]
+            self.pressure_curves[ch] = self.pressure_plot.plot(
+                pen=pg.mkPen(color, width=2)
+            )
 
+        self.temp_curves = {}
         self.temp_plot = pg.PlotWidget(title="Temperature vs Time") 
-        self.temp_curves = {ch: self.temp_plot.plot(pen=pg.mkPen(color))  
-                            for ch, color in zip(TEMP_CHANNELS, ["y","m"])} 
+        for i, ch in enumerate(system_config.TEMP_CHANNELS):
+            color = colours[i % len(colours)]
+            self.temp_curves[ch] = self.temp_plot.plot(
+                pen=pg.mkPen(color, width=2)
+            )
 
-      
         self.thrust_plot = pg.PlotWidget(title="Thrust vs Time") 
         self.thrust_curve = self.thrust_plot.plot( 
             pen=pg.mkPen("c",width=2) 
@@ -337,12 +356,25 @@ class MainWindow(QMainWindow):
         self.config_page.setLayout(config_layout) 
  
         # Define editable features 
-        self.valves_edit = QTextEdit(", ".join(VALVES)) 
-        self.pressure_edit = QTextEdit(", ".join(PRESSURE_CHANNELS)) 
-        self.temp_edit = QTextEdit(", ".join(TEMP_CHANNELS)) 
-        self.daq_interval_edit = QLineEdit(str(DAQ_INTERVAL_MS)) 
-        self.max_data_points_edit = QLineEdit(str(MAX_DATA_POINTS)) 
- 
+        self.valves_edit = QTextEdit(", ".join(system_config.VALVES)) 
+        self.pressure_edit = QTextEdit(", ".join(system_config.PRESSURE_CHANNELS)) 
+        self.temp_edit = QTextEdit(", ".join(system_config.TEMP_CHANNELS)) 
+        self.daq_interval_edit = QLineEdit(str(system_config.DAQ_INTERVAL_MS)) 
+        self.max_data_points_edit = QLineEdit(str(system_config.MAX_DATA_POINTS)) 
+        self.pressure_limits_edit = QTextEdit(
+            "\n".join(
+                f"{k}: {v}" for k, v in system_config.PRESSURE_LIMITS.items()
+            )
+        )
+        self.temp_limits_edit = QTextEdit(
+            "\n".join(
+                f"{k}: {v}" for k, v in system_config.TEMP_LIMITS.items()
+            )
+        )
+        self.heartbeat_timeout_edit = QLineEdit(
+            str(system_config.HEARTBEAT_TIMEOUT_S)
+        )
+
         # Create wdigets 
         config_layout.addWidget(QLabel("VALVES (comma & space separated):")) 
         config_layout.addWidget(self.valves_edit) 
@@ -354,6 +386,15 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.daq_interval_edit) 
         config_layout.addWidget(QLabel("MAX_DATA_POINTS:")) 
         config_layout.addWidget(self.max_data_points_edit) 
+        
+        config_layout.addWidget(QLabel("PRESSURE_LIMITS (format: name: value per line):"))
+        config_layout.addWidget(self.pressure_limits_edit)
+
+        config_layout.addWidget(QLabel("TEMP_LIMITS (format: name: value per line):"))
+        config_layout.addWidget(self.temp_limits_edit)
+
+        config_layout.addWidget(QLabel("HEARTBEAT_TIMEOUT_S:"))
+        config_layout.addWidget(self.heartbeat_timeout_edit)
 
         # Save button 
         save_btn = QPushButton("Save Config") 
@@ -381,7 +422,7 @@ class MainWindow(QMainWindow):
         self.pid_btn.clicked.connect(lambda: self.stack.setCurrentIndex(2)) 
 
         # LOGGING -------------------------------------------------------------- 
-        headers = ["time_s"] + PRESSURE_CHANNELS + TEMP_CHANNELS + ["thrust", "event"] 
+        headers = ["time_s"] + system_config.PRESSURE_CHANNELS + system_config.TEMP_CHANNELS + ["thrust", "event"] 
         self.logger = CSVLogger(headers) 
         self.logging_enabled = False # No data logging initially 
 
@@ -401,7 +442,7 @@ class MainWindow(QMainWindow):
         self.system_armed = False 
 
         # Close all valves 
-        for valve in VALVES: 
+        for valve in system_config.VALVES: 
             self.daq.set_digital(valve, False) 
 
         self.update_valve_buttons() 
@@ -450,6 +491,11 @@ class MainWindow(QMainWindow):
             # Reset button to OFF if system disarmed 
             self.valve_buttons[valve].setChecked(False) 
             return 
+        
+        if self.ignition_running:
+            print("Manual valve control disabled during ignition sequence.")
+            self.valve_buttons[valve].setChecked(False)
+            return
        
         self.daq.set_digital(valve, state) 
 
@@ -501,25 +547,41 @@ class MainWindow(QMainWindow):
             return 
 
         self.ignition_thread = IgnitionSequence(self.daq) 
-        self.ignition_thread.step_signal.connect(self.log_event) 
+        self.ignition_thread.step_signal.connect(self.handle_ignition_step) 
         self.ignition_thread.finished_signal.connect(self.ignition_complete) 
         self.ignition_thread.aborted_signal.connect(self.ignition_aborted) 
  
         self.ignition_running = True 
+        for btn in self.valve_buttons.values():
+            btn.setEnabled(False)
         self.ignition_thread.start() 
  
         self.log_event("IGNITION_START") 
         self.set_system_state("FIRING") 
 
+    def handle_ignition_step(self, valve_name, state):
+        # Ignore non-valve signals
+        if valve_name not in self.valve_buttons:
+            return
+
+        btn = self.valve_buttons[valve_name]
+
+        # Update button state visually
+        btn.setChecked(state)
+
     def ignition_complete(self): 
         self.ignition_running = False 
         self.log_event("IGNITION_DONE") 
         self.set_system_state("ARMED") 
+        for btn in self.valve_buttons.values():
+            btn.setEnabled(self.system_armed)
         print("Ignition sequence complete") 
 
     def ignition_aborted(self): 
         self.ignition_running = False 
-        self.log_event("IGNITION_ABORTED") 
+        self.log_event("IGNITION_ABORTED")
+        for btn in self.valve_buttons.values():
+            btn.setEnabled(self.system_armed)
         print("Ignition sequence aborted") 
 
     # Logging start/stop 
@@ -544,7 +606,7 @@ class MainWindow(QMainWindow):
         t = time.time() - self.start_time 
 
         # Fill data columns with blanks so structure stays consistent 
-        empty_data = [""]*(len(PRESSURE_CHANNELS) + len(TEMP_CHANNELS)) 
+        empty_data = [""]*(len(system_config.PRESSURE_CHANNELS) + len(system_config.TEMP_CHANNELS)) 
         row = [t] + empty_data + [event_name] 
         self.logger.write_row(row) 
 
@@ -562,7 +624,6 @@ class MainWindow(QMainWindow):
 
             # Re-write system_config.py 
             config_text = f"""# Valves 
-
 VALVES = {valves} 
 # Plot channels 
 PRESSURE_CHANNELS = {pressures} 
@@ -588,24 +649,31 @@ MAX_DATA_POINTS = {max_data_points}
     # Handle incoming data 
     def handle_new_data(self, data): 
         t = time.time() - self.start_time 
-        # Append all data first 
+
+        # SAFEY EVALUATION FIRST
+        self.safety_manager.evaluate_sensors(data)
+        self.safety_manager.heartbeat()
+
+        # Append all data 
         self.time_data.append(t) 
-        for key in PRESSURE_CHANNELS: 
+        for key in system_config.PRESSURE_CHANNELS: 
             self.pressure_data[key].append(data[key]) 
-        for key in TEMP_CHANNELS: 
+
+        for key in system_config.TEMP_CHANNELS: 
             self.temp_data[key].append(data[key]) 
+
         thrust = data.get("thrust", None) 
         if thrust is not None: 
             self.thrust_data.append(thrust) 
       
         # Trim all data together 
-        if len(self.time_data) > MAX_DATA_POINTS: 
-            self.time_data = self.time_data[-MAX_DATA_POINTS:] 
-            for key in PRESSURE_CHANNELS: 
-                self.pressure_data[key] = self.pressure_data[key][-MAX_DATA_POINTS:] 
-            for key in TEMP_CHANNELS: 
-                self.temp_data[key] = self.temp_data[key][-MAX_DATA_POINTS:] 
-            self.thrust_data = self.thrust_data[-MAX_DATA_POINTS:] 
+        if len(self.time_data) > system_config.MAX_DATA_POINTS: 
+            self.time_data = self.time_data[-system_config.MAX_DATA_POINTS:] 
+            for key in system_config.PRESSURE_CHANNELS: 
+                self.pressure_data[key] = self.pressure_data[key][-system_config.MAX_DATA_POINTS:] 
+            for key in system_config.TEMP_CHANNELS: 
+                self.temp_data[key] = self.temp_data[key][-system_config.MAX_DATA_POINTS:] 
+            self.thrust_data = self.thrust_data[-system_config.MAX_DATA_POINTS:] 
 
         # Update plots 
         for ch, curve in self.pressure_curves.items(): 
@@ -621,10 +689,19 @@ MAX_DATA_POINTS = {max_data_points}
         # CSV logging 
         if self.logging_enabled: 
             row = ([t]  
-            + [data[ch] for ch in PRESSURE_CHANNELS + TEMP_CHANNELS] 
+            + [data[ch] for ch in system_config.PRESSURE_CHANNELS + system_config.TEMP_CHANNELS] 
             + [data.get("thrust", "")] 
             + [""]) 
             self.logger.write_row(row) 
+
+    # Abort handler for watchdog
+    def handle_watchdog_abort(self, reason="UNKNOWN"):
+        print(f"[SAFETY ABORT] {reason}")
+
+        if self.ignition_running and self.ignition_thread:
+            self.ignition_thread.abort()
+
+        self.abort_system()
 
     def closeEvent(self, event): 
         print("Shutting down DAQ...") 
