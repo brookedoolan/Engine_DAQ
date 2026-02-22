@@ -9,7 +9,7 @@ class SensorWatchdog(QObject):
 
         # Add 3 overpressure/overtemp counts to avoid noisy data
         self.violation_counts_pressure = {}
-        self.violation_counts_temp = []
+        self.violation_counts_temp = {}
 
     def evaluate(self, data: dict):
 
