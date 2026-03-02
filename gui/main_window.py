@@ -11,7 +11,11 @@ import sys
 import os 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap 
+
 from daq.dummy_daq import DummyDaq 
+# from daq.labjack_daq import LabJackDaq
+from daq.daq_manager import DAQManager
+
 from daq.daq_thread import DAQ_Thread 
 from logging_data.csv_logger import CSVLogger 
 import config.system_config as system_config
@@ -85,6 +89,9 @@ class MainWindow(QMainWindow):
 
         # =================== DAQ ========================================= 
         self.daq = DummyDaq() 
+        # self.daq = LabJackDaq(ip="192.168.1.207") <----- CHANGE IP or change to serial number etc
+        # self.daq = DAQManager()
+
         self.daq_thread = DAQ_Thread(self.daq, system_config.DAQ_INTERVAL_MS) 
         self.daq_thread.data_ready.connect(self.handle_new_data) 
         self.daq_thread.start() 
@@ -126,7 +133,7 @@ class MainWindow(QMainWindow):
 
 
         # ================== GUI SETUP ====================================== 
-        # LEFT SIDEBAR ---------------------------- 
+        # ---------------- LEFT SIDEBAR ------------------------------------- 
         sidebar = QVBoxLayout() 
         main_layout.addLayout(sidebar, 1) # Width ratio 
 
@@ -352,8 +359,14 @@ class MainWindow(QMainWindow):
  
         # 2. System config ------------------------------------------------------- 
         self.config_page = QWidget() 
-        config_layout = QVBoxLayout() 
+        config_layout = QHBoxLayout() 
         self.config_page.setLayout(config_layout) 
+
+        left_column = QVBoxLayout()
+        right_column = QVBoxLayout()
+
+        config_layout.addLayout(left_column, 1)
+        config_layout.addLayout(right_column, 1)
  
         # Define editable features 
         self.valves_edit = QTextEdit(", ".join(system_config.VALVES)) 
@@ -375,34 +388,67 @@ class MainWindow(QMainWindow):
             str(system_config.HEARTBEAT_TIMEOUT_S)
         )
 
+        # Labjack Pin Maps
+        self.valve_dio_edit = QTextEdit(
+            "\n".join(f"{k}: {v}" for k, v in system_config.VALVE_DIO_MAP.items())
+        )
+        self.pressure_map_edit = QTextEdit(
+            "\n".join(f"{k}: {v}" for k, v in system_config.PRESSURE_MAP.items())
+        )
+        self.temp_map_edit = QTextEdit(
+            "\n".join(f"{k}: {v}" for k, v in system_config.TEMP_MAP.items())
+        )
+        self.thrust_map_edit = QTextEdit(
+            "\n".join(f"{k}: {v}" for k, v in system_config.THRUST_MAP.items())
+        )
+        self.safe_states_edit = QTextEdit(
+            "\n".join(f"{k}: {v}" for k, v in system_config.DIO_SAFE_STATES.items())
+        )
+
         # Create wdigets 
-        config_layout.addWidget(QLabel("VALVES (comma & space separated):")) 
-        config_layout.addWidget(self.valves_edit) 
-        config_layout.addWidget(QLabel("PRESSURE_CHANNELS (comma & space separated):")) 
-        config_layout.addWidget(self.pressure_edit) 
-        config_layout.addWidget(QLabel("TEMP_CHANNELS (comma & space separated):")) 
-        config_layout.addWidget(self.temp_edit) 
-        config_layout.addWidget(QLabel("DAQ_INTERVAL_MS:")) 
-        config_layout.addWidget(self.daq_interval_edit) 
-        config_layout.addWidget(QLabel("MAX_DATA_POINTS:")) 
-        config_layout.addWidget(self.max_data_points_edit) 
+        left_column.addWidget(QLabel("VALVES (comma & space separated):")) 
+        left_column.addWidget(self.valves_edit) 
+        left_column.addWidget(QLabel("PRESSURE_CHANNELS (comma & space separated):")) 
+        left_column.addWidget(self.pressure_edit) 
+        left_column.addWidget(QLabel("TEMP_CHANNELS (comma & space separated):")) 
+        left_column.addWidget(self.temp_edit) 
+        left_column.addWidget(QLabel("DAQ_INTERVAL_MS:")) 
+        left_column.addWidget(self.daq_interval_edit) 
+        left_column.addWidget(QLabel("MAX_DATA_POINTS:")) 
+        left_column.addWidget(self.max_data_points_edit)     
         
-        config_layout.addWidget(QLabel("PRESSURE_LIMITS (format: name: value per line):"))
-        config_layout.addWidget(self.pressure_limits_edit)
+        left_column.addWidget(QLabel("PRESSURE_LIMITS (format: name: value per line):"))
+        left_column.addWidget(self.pressure_limits_edit)
 
-        config_layout.addWidget(QLabel("TEMP_LIMITS (format: name: value per line):"))
-        config_layout.addWidget(self.temp_limits_edit)
+        left_column.addWidget(QLabel("TEMP_LIMITS (format: name: value per line):"))
+        left_column.addWidget(self.temp_limits_edit)
 
-        config_layout.addWidget(QLabel("HEARTBEAT_TIMEOUT_S:"))
-        config_layout.addWidget(self.heartbeat_timeout_edit)
+        left_column.addWidget(QLabel("HEARTBEAT_TIMEOUT_S:"))
+        left_column.addWidget(self.heartbeat_timeout_edit)
+
+        right_column.addWidget(QLabel("VALVE_DIO_MAP (format: name: ('T7','DIO0'))"))
+        right_column.addWidget(self.valve_dio_edit)
+
+        right_column.addWidget(QLabel("PRESSURE_MAP (format: name: ('T7','AIN0'))"))
+        right_column.addWidget(self.pressure_map_edit)
+
+        right_column.addWidget(QLabel("TEMP_MAP (format: name: ('T7_PRO','AIN0'))"))
+        right_column.addWidget(self.temp_map_edit)
+
+        right_column.addWidget(QLabel("THRUST_MAP (format: name: ('T7','AIN2'))"))
+        right_column.addWidget(self.thrust_map_edit)
+
+        right_column.addWidget(QLabel("DIO_SAFE_STATES (format: name: True/False)"))
+        right_column.addWidget(self.safe_states_edit)
 
         # Save button 
         save_btn = QPushButton("Save Config") 
         save_btn.clicked.connect(self.save_config) # Calls helper function save_config to save to python file 
-        config_layout.addWidget(save_btn) 
+        left_column.addWidget(save_btn) 
 
         # Spacer 
-        config_layout.addStretch() 
+        left_column.addStretch()
+        right_column.addStretch() 
  
         # 3. Placeholder PID page ------------------------------------------------ 
         self.pid_page = QWidget() 
@@ -621,23 +667,60 @@ class MainWindow(QMainWindow):
             temps = [t.strip() for t in self.temp_edit.toPlainText().split(",") if t.strip()] 
             daq_interval = int(self.daq_interval_edit.text()) 
             max_data_points = int(self.max_data_points_edit.text()) 
+            pressure_limits = {}
+            for line in self.pressure_limits_edit.toPlainText().splitlines():
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    pressure_limits[name.strip()] = float(value.strip())
+            temp_limits = {}
+            for line in self.temp_limits_edit.toPlainText().splitlines():
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    temp_limits[name.strip()] = float(value.strip())
+            heartbeat_timeout = float(self.heartbeat_timeout_edit.text())
+
+            valve_dio_map = parse_tuple_map(self.valve_dio_edit.toPlainText())
+            pressure_map = parse_tuple_map(self.pressure_map_edit.toPlainText())
+            temp_map = parse_tuple_map(self.temp_map_edit.toPlainText())
+            thrust_map = parse_tuple_map(self.thrust_map_edit.toPlainText())
+            safe_states = parse_bool_map(self.safe_states_edit.toPlainText())
 
             # Re-write system_config.py 
-            config_text = f"""# Valves 
-VALVES = {valves} 
-# Plot channels 
-PRESSURE_CHANNELS = {pressures} 
-TEMP_CHANNELS = {temps} 
- 
-# DAQ settings 
-DAQ_INTERVAL_MS = {daq_interval} 
-MAX_DATA_POINTS = {max_data_points} 
+            config_text = config_text = f"""
+# Device IPs
+T7_IP = "{system_config.T7_IP}"
+T7_PRO_IP = "{system_config.T7_PRO_IP}"
 
-""" 
-   
+# Valves
+VALVES = {valves}
+VALVE_DIO_MAP = {valve_dio_map}
+
+# Sensors
+PRESSURE_CHANNELS = {pressures}
+PRESSURE_MAP = {pressure_map}
+
+TEMP_CHANNELS = {temps}
+TEMP_MAP = {temp_map}
+
+THRUST_MAP = {thrust_map}
+
+# DAQ settings
+DAQ_INTERVAL_MS = {daq_interval}
+MAX_DATA_POINTS = {max_data_points}
+
+# Safety limits
+PRESSURE_LIMITS = {pressure_limits}
+TEMP_LIMITS = {temp_limits}
+HEARTBEAT_TIMEOUT_S = {heartbeat_timeout}
+
+# Safe valve states
+DIO_SAFE_STATES = {safe_states}
+"""
+
             current_dir = os.path.dirname(os.path.abspath(__file__)) # Path to THIS file (main.window.py) 
             project_root = os.path.dirname(current_dir) # Go up one folder  
             config_path = os.path.join(project_root, "config", "system_config.py") # Now go into config/system_config.py 
+
             with open(config_path, "w") as f: 
                 f.write(config_text) 
 
@@ -645,6 +728,23 @@ MAX_DATA_POINTS = {max_data_points}
 
         except Exception as e: 
             print("Error saving config:", e) 
+
+        # Helpers to parse data inputs to system config 
+        def parse_tuple_map(text):
+            result = {}
+            for line in text.splitlines():
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    result[name.strip()] = eval(value.strip())
+                return result
+
+        def parse_bool_map(text):
+            result = {}
+            for line in text.splitlines():
+                if ":" in line:
+                    name, value = line.split(":", 1)
+                    result[name.strip()] = value.strip() == "True"
+            return result
 
     # Handle incoming data 
     def handle_new_data(self, data): 
